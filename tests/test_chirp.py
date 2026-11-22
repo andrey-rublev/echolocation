@@ -45,4 +45,4 @@ def test_periodic_player_matches_train_for_any_block_size() -> None:
     blocks = [player.fill(n) for n in (100, 2400, 7, 4893, 1000)]
     got = np.concatenate(blocks)
     expected = chirp_train(cfg.chirp, fs, 6, gain=0.1)[: len(got)]
-    np.testing.assert_allclose(got, expected)
+    np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-8)

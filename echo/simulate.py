@@ -232,6 +232,23 @@ class SimSonar:
         self._k = 0
         self._agc_level = 1.0
 
+    # -- source interface (mirrors audio_io.DuplexSonar) ------------------------
+    t0 = 0.0  # stream time starts at zero
+    xruns = 0
+
+    def set_gain(self, gain: float) -> None:
+        self.gain = float(gain)
+
+    def __enter__(self) -> SimSonar:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def truth_at_capture(self, t_capture: float) -> float | None:
+        """Ground truth for a frame timestamped on the capture clock."""
+        return self.person(t_capture - self.cfg.sim.latency_samples / self.fs)
+
     # -- scene ----------------------------------------------------------------
     def _static_ir(self) -> np.ndarray:
         s = self.cfg.sim

@@ -40,19 +40,35 @@ def chirp_train(c: ChirpConfig, sample_rate: int, n_periods: int, gain: float) -
 class PeriodicPlayer:
     """Fills arbitrary-length output blocks from a repeating period.
 
-    Used inside the audio callback, so it does no allocation beyond the output
-    slice and keeps its own sample counter (no global state).
+    Used inside the audio callback: it copies slices of a precomputed period
+    (no per-call allocation in :meth:`fill_into`) and keeps its own sample
+    counter. ``gain`` may be changed from another thread; a float assignment is
+    atomic in CPython and takes effect at the next callback.
     """
 
     def __init__(self, period: np.ndarray, gain: float) -> None:
-        self._period = (period * gain).astype(np.float32)
+        self._period = np.asarray(period, dtype=np.float32)
+        self.gain = float(gain)
         self._pos = 0
+        self.samples_played = 0
 
     @property
     def period_samples(self) -> int:
         return len(self._period)
 
+    def fill_into(self, out: np.ndarray) -> None:
+        """Write the next ``len(out)`` samples (1-D float32 view) into ``out``."""
+        n, P = len(out), len(self._period)
+        g = self.gain
+        written = 0
+        while written < n:
+            take = min(n - written, P - self._pos)
+            np.multiply(self._period[self._pos : self._pos + take], g, out=out[written : written + take])
+            written += take
+            self._pos = (self._pos + take) % P
+        self.samples_played += n
+
     def fill(self, n: int) -> np.ndarray:
-        idx = (self._pos + np.arange(n)) % len(self._period)
-        self._pos = (self._pos + n) % len(self._period)
-        return self._period[idx]
+        out = np.empty(n, dtype=np.float32)
+        self.fill_into(out)
+        return out
