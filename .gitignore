@@ -9,3 +9,4 @@ models/*.task
 *.wav
 .vscode/
 .idea/
+*.log

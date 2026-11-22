@@ -64,7 +64,8 @@ def run_reader(source: Source, cfg: Config, feed: FrameFeed, max_frames: int | N
 class Waterfall:
     """Holds the scrolling image and draws it into a matplotlib figure."""
 
-    def __init__(self, cfg: Config, history_s: float = 10.0, title: str = "") -> None:
+    def __init__(self, cfg: Config, history_s: float = 10.0, title: str = "",
+                 info_panel: bool = False) -> None:
         import matplotlib.pyplot as plt
 
         self.cfg = cfg
@@ -76,16 +77,30 @@ class Waterfall:
         self.last: EchoFrame | None = None
         self.last_diff = np.zeros(self.grid.n_bins)
         self.first_t: float | None = None
-        self.track: deque[float] = deque(maxlen=self.n_cols)
 
         apply_style()
-        self.fig, (self.ax_w, self.ax_p) = plt.subplots(
-            1, 2, figsize=(12, 5), gridspec_kw={"width_ratios": [3, 1]}, constrained_layout=True
-        )
+        self.ax_info = None
+        if info_panel:
+            self.fig = plt.figure(figsize=(13, 6), constrained_layout=True)
+            gs = self.fig.add_gridspec(2, 2, width_ratios=[3, 1], height_ratios=[3, 2])
+            self.ax_w = self.fig.add_subplot(gs[:, 0])
+            self.ax_p = self.fig.add_subplot(gs[0, 1])
+            self.ax_info = self.fig.add_subplot(gs[1, 1])
+            self.ax_info.set_axis_off()
+        else:
+            self.fig, (self.ax_w, self.ax_p) = plt.subplots(
+                1, 2, figsize=(12, 5), gridspec_kw={"width_ratios": [3, 1]}, constrained_layout=True
+            )
         top = self.grid.n_bins * self.grid.bin_m
+        self.t_axis = np.linspace(-history_s, 0, self.n_cols)
+        self.track = np.full(self.n_cols, np.nan)
+        (self.l_track,) = self.ax_w.plot(self.t_axis, self.track, color="#8fd694", lw=1.6,
+                                         alpha=0.9, label="predicted distance")
         self.im = self.ax_w.imshow(self.img, origin="lower", aspect="auto", cmap=CMAP,
                                    vmin=-75, vmax=-30, extent=(-history_s, 0, 0, top),
                                    interpolation="nearest")
+        self.ax_w.set_xlim(-history_s, 0)
+        self.ax_w.set_ylim(0, top)
         self.ax_w.set_xlabel("time (s, now = 0)")
         self.ax_w.set_ylabel("range (m)")
         self.ax_w.set_title(title or "echo waterfall (change vs background)", loc="left")
@@ -119,8 +134,15 @@ class Waterfall:
         k = new.shape[1]
         self.img = np.concatenate([self.img[:, k:], new], axis=1)
 
+    def add_track(self, values: list[float]) -> None:
+        """Append one predicted distance per frame (NaN = nobody) to the overlay."""
+        v = np.asarray(values, dtype=float)[-self.n_cols:]
+        if len(v):
+            self.track = np.concatenate([self.track[len(v):], v])
+
     def draw(self, xruns: int = 0) -> None:
         self.im.set_data(self.img)
+        self.l_track.set_ydata(self.track)
         if self.last is not None:
             f = self.last
             self.l_raw.set_xdata(to_db(f.profile, f.direct_amp))
