@@ -58,6 +58,7 @@ camera:
   # Pinhole constant K = shoulder_width_px * distance_m, measured by
   # `python -m echo.camera calibrate --distance 1.5`. distance = K / shoulder_px.
   shoulder_k_px_m: 230.0
+  torso_to_shoulder: 1.3       # torso height / shoulder width in pixels (also measured by calibrate)
   min_visibility: 0.5
   max_label_age_s: 0.25        # audio frames further than this from a camera sample get no label
 

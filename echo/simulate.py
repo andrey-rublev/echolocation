@@ -165,8 +165,12 @@ class Room:
     diffuse_taps: tuple[tuple[float, float], ...] = field(default=())
 
 
-def make_room(name: str) -> Room:
-    """Deterministic pseudo-random room layout derived from ``name``."""
+def make_room(name: str, variant: int = 0) -> Room:
+    """Deterministic pseudo-random room layout derived from ``name``.
+
+    ``variant`` > 0 perturbs it slightly (a chair moved, the laptop nudged by
+    a centimetre), like recording the same room on another day.
+    """
     seed = int.from_bytes(hashlib.sha256(name.encode()).digest()[:4], "little")
     rng = np.random.default_rng(seed)
     refl: list[tuple[float, float]] = [(float(rng.uniform(0.25, 0.4)), 0.02)]  # desk/screen
@@ -177,6 +181,12 @@ def make_room(name: str) -> Room:
     for _ in range(120):
         r = float(rng.uniform(0.5, 6.0))
         diffuse.append((r, float(rng.normal(0, 1)) * 0.004 * math.exp(-r / 1.5)))
+    if variant:
+        vr = np.random.default_rng(seed + 7919 * variant)
+        shift = float(vr.normal(0, 0.01))  # laptop placement
+        refl = [(r + shift, a) for r, a in refl]
+        r = float(vr.uniform(0.8, 3.5))  # a movable object
+        refl.append((r, float(vr.uniform(0.1, 0.3)) * 0.12 / (2 * r)))
     return Room(name, tuple(refl), tuple(diffuse))
 
 

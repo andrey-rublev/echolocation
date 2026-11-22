@@ -124,7 +124,7 @@ def sessions_figure(paths: Sequence[Path], alpha: float) -> Figure:
         title = f"{s.meta.get('label', '?')}  |  room={s.meta.get('room', '?')}"
         im = plot_waterfall(ax, img, s.times - s.times[0], s.grid, title)
         if np.isfinite(s.distance).any():
-            ax.plot(s.times - s.times[0], s.distance, color=ACCENT, lw=0.8, alpha=0.7,
+            ax.plot(s.times - s.times[0], s.distance, color=ACCENT, lw=0.7, alpha=0.45,
                     label="label distance")
             ax.legend(loc="upper right", frameon=False, fontsize=8)
     if im is not None:

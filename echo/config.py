@@ -84,6 +84,7 @@ class CameraConfig:
     device: int = 0
     model_path: str = "models/pose_landmarker_lite.task"
     shoulder_k_px_m: float = 230.0
+    torso_to_shoulder: float = 1.3
     min_visibility: float = 0.5
     max_label_age_s: float = 0.25
 
