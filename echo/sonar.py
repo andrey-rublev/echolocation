@@ -65,7 +65,7 @@ def parse_person(spec: str, seed: int = 0) -> Trajectory:
     rng = np.random.default_rng(seed)
     if name == "none":
         return absent()
-    if name == "static":
+    if name in ("static", "book"):
         return static_at(nums[0] if nums else 1.0)
     if name == "wave":
         return hand_wave(center_m=nums[0] if nums else 0.3)
@@ -90,8 +90,13 @@ def open_source(
     g = resolve_gain(cfg.chirp.gain if gain is None else gain, cfg.safety.max_gain, allow_loud)
     if sim:
         person = parse_person(scene.person, seed=scene.seed or 0)
-        hand = scene.person.startswith("wave")
-        model = PersonModel(strength=0.03, parts=((0.0, 1.0),)) if hand else PersonModel()
+        # A hand or a book is a single compact reflector; a person is several.
+        if scene.person.startswith("wave"):
+            model = PersonModel(strength=0.004, parts=((0.0, 1.0),), sway_m=0.0)
+        elif scene.person.startswith("book"):
+            model = PersonModel(strength=0.03, parts=((0.0, 1.0),), sway_m=0.0)
+        else:
+            model = PersonModel()
         return SimSonar(cfg, room=make_room(scene.room), person=person, gain=g,
                         realtime=scene.realtime, agc=scene.agc, person_model=model, seed=scene.seed)
     from echo.audio_io import DuplexSonar
