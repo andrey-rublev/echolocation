@@ -1,0 +1,78 @@
+﻿# echolocation configuration. Every module reads its parameters from here.
+# Paths are relative to the repository root.
+
+audio:
+  sample_rate: 48000
+  # Device name substring (case-insensitive) or integer index. null = system default.
+  # Run `python -m echo.audio_io list` to see what is available.
+  input_device: null
+  output_device: null
+  host_api: "Windows WASAPI"   # preferred host API; falls back to the default if missing
+  wasapi_exclusive: false      # exclusive mode bypasses some Windows effects but may be refused
+  output_channels: 2           # the mono chirp is copied to every output channel
+  input_channels: 1
+  input_channel: 0             # which captured channel to use (laptop mic arrays expose several)
+  latency: "low"               # PortAudio latency hint: "low", "high" or seconds
+
+chirp:
+  f0_hz: 2000.0
+  f1_hz: 18000.0
+  duration_s: 0.020
+  period_s: 0.050              # chirp + silence; 0.05 s = 20 chirps/sec
+  method: "linear"             # "linear" or "logarithmic"
+  taper: 0.25                  # Tukey window alpha (0 = rectangular, 1 = Hann)
+  gain: 0.1                    # fraction of full scale. Start low.
+
+safety:
+  # Hard ceiling on chirp gain. Anything above this is refused unless you pass
+  # --allow-loud on the command line. Values above 1.0 are always clipped to 1.0.
+  max_gain: 0.3
+
+profile:
+  speed_of_sound_mps: 343.0
+  max_range_m: 4.0
+  decimate: 4                  # average-pool the envelope by this factor (1 = full res)
+  pre_samples: 64              # samples kept before the direct-path peak
+  direct_search_samples: 24    # per-frame direct-path re-alignment window (+/-)
+  align: "direct"              # "direct": re-align each frame on the direct path; "fixed": lock once
+  warmup_periods: 10           # frames used to lock onto the direct-path phase
+  # Zero range = direct-path peak + calib_offset_samples. Written by `python -m echo.calibrate`.
+  calib_offset_samples: 0.0
+  background_alpha: 0.05       # EMA rate for background subtraction (higher = faster forgetting)
+
+sim:
+  seed: 0
+  latency_samples: 3517        # arbitrary system latency, deliberately > one period
+  speaker_mic_m: 0.12          # direct path length
+  direct_amplitude: 1.0
+  noise_std: 0.0005
+  jitter_samples: 0            # random per-frame timing jitter (0 = sample-locked duplex)
+
+collect:
+  out_dir: "data/sessions"
+  save_wav: false
+
+camera:
+  device: 0
+  model_path: "models/pose_landmarker_lite.task"
+  # Pinhole constant K = shoulder_width_px * distance_m, measured by
+  # `python -m echo.camera calibrate --distance 1.5`. distance = K / shoulder_px.
+  shoulder_k_px_m: 230.0
+  min_visibility: 0.5
+  max_label_age_s: 0.25        # audio frames further than this from a camera sample get no label
+
+train:
+  out_dir: "runs"
+  num_threads: 4
+  epochs: 30
+  batch_size: 128
+  lr: 0.002
+  weight_decay: 0.0001
+  test_fraction: 0.3
+  val_fraction: 0.2
+  patience: 8
+  seed: 0
+  augment:
+    noise_std: 0.05            # in standardized feature units
+    gain_db: 2.0               # +/- uniform
+    jitter_bins: 2             # +/- range-bin shift

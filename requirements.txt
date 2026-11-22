@@ -1,0 +1,10 @@
+numpy
+scipy
+sounddevice
+matplotlib
+pyyaml
+pytest
+opencv-python
+mediapipe
+# torch CPU build: pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch

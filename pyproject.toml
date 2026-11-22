@@ -1,0 +1,25 @@
+[project]
+name = "echolocation"
+version = "0.1.0"
+description = "Laptop-only sonar: chirps from the speaker, echoes into the mic, a small model infers presence, distance and room."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "sounddevice",
+    "matplotlib",
+    "pyyaml",
+    "torch",
+    "opencv-python",
+    "mediapipe",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["echo"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
