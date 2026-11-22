@@ -39,6 +39,9 @@ def _sd() -> Any:
     return sd
 
 
+LOOPBACK_HINTS = ("stereo mix", "loopback", "what u hear", "wave out")
+
+
 @dataclass(frozen=True)
 class DeviceInfo:
     index: int
@@ -138,6 +141,10 @@ class DuplexSonar:
         self.output_index = resolve_device(a.output_device, "output", a.host_api, devices)
         by_index = {d.index: d for d in devices}
         self.input_info, self.output_info = by_index[self.input_index], by_index[self.output_index]
+        if any(k in self.input_info.name.lower() for k in LOOPBACK_HINTS):
+            print(f"WARNING: input '{self.input_info.name}' looks like a loopback device; it records "
+                  "the speaker signal digitally and will contain no echoes. Set audio.input_device "
+                  "to your microphone.")
         if self.input_info.host_api != self.output_info.host_api:
             raise ValueError(
                 f"Input ({self.input_info.host_api}) and output ({self.output_info.host_api}) "

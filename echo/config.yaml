@@ -5,7 +5,7 @@ audio:
   sample_rate: 48000
   # Device name substring (case-insensitive) or integer index. null = system default.
   # Run `python -m echo.audio_io list` to see what is available.
-  input_device: null
+  input_device: "Microphone Array"   # NOT "Stereo Mix": that records the speaker digitally, no echoes
   output_device: null
   host_api: "Windows WASAPI"   # preferred host API; falls back to the default if missing
   wasapi_exclusive: false      # exclusive mode bypasses some Windows effects but may be refused
