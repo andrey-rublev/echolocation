@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import queue
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -160,7 +161,10 @@ class DuplexSonar:
         self._raw_in: list[np.ndarray] = []
         self._raw_out: list[np.ndarray] = []
         self._mono = np.zeros(0, dtype=np.float32)
+        self._base_name = self.device_name
         self._stream: Any = None
+        self._started = threading.Event()
+        self.exclusive = False
         self.t0: float = 0.0  # time.monotonic() of the first captured sample
         self.xruns = 0
         self.dropped_blocks = 0
@@ -177,10 +181,11 @@ class DuplexSonar:
     # -- stream ---------------------------------------------------------------
     def _callback(self, indata: np.ndarray, outdata: np.ndarray, frames: int,
                   time_info: Any, status: Any) -> None:
-        if self.t0 == 0.0:
+        if not self._started.is_set():
             # Map the ADC time of this buffer onto time.monotonic().
             lag = max(0.0, float(time_info.currentTime - time_info.inputBufferAdcTime))
             self.t0 = time.monotonic() - lag
+            self._started.set()
         if status:
             self.xruns += 1
             if len(self.status_messages) < 50:
@@ -196,14 +201,14 @@ class DuplexSonar:
         except queue.Full:
             self.dropped_blocks += 1
 
-    def start(self) -> None:
+    def _open(self, exclusive: bool) -> Any:
         sd = _sd()
         a = self.cfg.audio
         extra = None
         if self.input_info.host_api == "Windows WASAPI":
-            ws = sd.WasapiSettings(exclusive=a.wasapi_exclusive, auto_convert=not a.wasapi_exclusive)
+            ws = sd.WasapiSettings(exclusive=exclusive, auto_convert=not exclusive)
             extra = (ws, ws)
-        self._stream = sd.Stream(
+        return sd.Stream(
             samplerate=a.sample_rate,
             device=(self.input_index, self.output_index),
             channels=(self.in_channels, self.out_channels),
@@ -212,7 +217,38 @@ class DuplexSonar:
             extra_settings=extra,
             callback=self._callback,
         )
-        self._stream.start()
+
+    def start(self) -> None:
+        # Exclusive mode bypasses the Windows mixer and its effects (noise
+        # suppression / echo cancellation, which erase the chirp within seconds).
+        # It is refused when another app holds the device; fall back to shared.
+        # Exclusive streams also occasionally open but never deliver a callback;
+        # a short watchdog retries once, then falls back to shared mode.
+        want = self.cfg.audio.wasapi_exclusive and self.input_info.host_api == "Windows WASAPI"
+        attempts = [True, True, False] if want else [False]
+        for i, excl in enumerate(attempts):
+            self.exclusive = excl
+            self._started.clear()
+            try:
+                self._stream = self._open(excl)
+                self._stream.start()
+            except Exception as exc:  # PortAudioError; sounddevice is imported lazily
+                self._stream = None
+                if not excl:
+                    raise
+                print(f"WARNING: WASAPI exclusive mode was refused ({exc}).")
+                continue
+            if self._started.wait(timeout=1.5):
+                break
+            self.stop()
+            if i == len(attempts) - 1:
+                raise RuntimeError("The audio stream opened but delivered no audio. Is the microphone "
+                                   "enabled in Settings > Privacy & security > Microphone?")
+            print(f"WARNING: {'exclusive' if excl else 'shared'} stream delivered no audio; retrying.")
+        if want and not self.exclusive:
+            print("WARNING: using WASAPI shared mode. Windows audio effects may now suppress the chirp; "
+                  "close other apps using the speakers or mic and retry.")
+        self.device_name = self._base_name + (" [exclusive]" if self.exclusive else " [shared]")
 
     def stop(self) -> None:
         if self._stream is not None:

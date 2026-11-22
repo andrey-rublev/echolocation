@@ -25,7 +25,7 @@ from echo.config import REPO_ROOT, load_config
 from echo.dataset import StreamingFeatures
 from echo.live_waterfall import FrameFeed, Waterfall, run_reader
 from echo.profile import EchoFrame
-from echo.sonar import add_source_args, source_from_args
+from echo.sonar import add_source_args, short_device_name, source_from_args
 from echo.train import load_model, predict
 from echo.viz import ACCENT, ACCENT2, FG
 
@@ -150,7 +150,7 @@ def main(argv: list[str] | None = None) -> None:
     cfg, source = source_from_args(args, realtime=not args.headless)
     max_frames = None if args.seconds is None else int(round(args.seconds / cfg.chirp.period_s))
     wf = Waterfall(cfg, history_s=args.history, info_panel=True,
-                   title=f"echolocation live - {source.device_name}")
+                   title=f"echolocation live - {short_device_name(source.device_name)}")
     info = InfoPanel(wf.ax_info)
     feed = FrameFeed()
 

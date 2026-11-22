@@ -93,3 +93,44 @@ def test_resolve_device_prefers_wasapi_by_name() -> None:
         resolve_device("headset", "input", "Windows WASAPI", DEVICES)
     table = format_devices(DEVICES, "Windows WASAPI")
     assert table.splitlines()[1].lstrip().startswith("5*")
+
+
+class _ArraySource:
+    """Minimal Source that replays a recording in 960-sample blocks."""
+
+    def __init__(self, x: np.ndarray, gain: float = 0.1) -> None:
+        self.x, self.gain, self.t0, self.xruns, self.device_name = x, gain, 0.0, 0, "array"
+
+    def __enter__(self) -> "_ArraySource":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        pass
+
+    def set_gain(self, gain: float) -> None:
+        self.gain = gain
+
+    def blocks(self):  # type: ignore[no-untyped-def]
+        for i in range(0, len(self.x), 960):
+            yield self.x[i : i + 960]
+
+
+def test_stream_frames_pauses_while_chirp_is_lost(capsys: pytest.CaptureFixture[str]) -> None:
+    from echo.sonar import stream_frames
+
+    cfg = load_config()
+    src = open_source(cfg, sim=True, scene=SimScene(realtime=False))
+    with src:
+        x = src.record(12.0)  # type: ignore[attr-defined]
+    P = cfg.period_samples
+    x = x.copy()
+    x[4 * 20 * P : 8 * 20 * P] = np.random.default_rng(0).normal(0, 1e-5, 4 * 20 * P)  # 4 s muted
+    frames = list(stream_frames(_ArraySource(x), cfg))
+    times = np.array([f.time_s for f in frames])
+    err = capsys.readouterr().err
+    assert "disappeared" in err and "back" in err
+    # At most ~1 s of junk frames inside the muted span, and frames resume after it.
+    assert np.sum((times > 4.2) & (times < 7.8)) <= 22
+    assert np.sum(times > 9.0) > 40
+    amps = np.array([f.direct_amp for f in frames])
+    assert np.median(amps[times > 9.0]) > 0.5 * np.median(amps[times < 3.5])

@@ -7,6 +7,8 @@ takes ``--sim`` and gets the same stream of :class:`~echo.profile.EchoFrame`.
 from __future__ import annotations
 
 import argparse
+import re
+import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Protocol
@@ -52,6 +54,14 @@ class SimScene:
     agc: bool = False
     realtime: bool = True
     seed: int | None = None
+
+
+def short_device_name(name: str) -> str:
+    """'in: Microphone Array (3- Intel(R) ...) | out: ...' -> 'in: Microphone Array | out: ...'."""
+    prev = None
+    while prev != name:  # strip innermost parentheses until none are left
+        prev, name = name, re.sub(r"\s*\([^()]*\)", "", name)
+    return name
 
 
 def parse_person(spec: str, seed: int = 0) -> Trajectory:
@@ -104,6 +114,10 @@ def open_source(
     return DuplexSonar(cfg, gain=g, allow_loud=allow_loud, keep_raw=keep_raw)
 
 
+LOST_FRAMES = 20  # 1 s at 20 chirps/s
+LOST_FRACTION = 0.2
+
+
 def stream_frames(
     source: Source,
     cfg: Config,
@@ -114,6 +128,13 @@ def stream_frames(
 
     If the stream reports an xrun (dropped or inserted samples) the period
     phase is no longer valid, so the processor is rebuilt and re-locks.
+
+    If the chirp disappears (speaker muted, volume key, another app grabbing
+    the device) every profile would be normalised by ~0 and look like a wall
+    of motion. After ``LOST_FRAMES`` frames below ``LOST_FRACTION`` of the
+    normal direct-path level the processor is rebuilt, so no frames are
+    emitted until the chirp is back and locked again.
+
     ``on_block`` sees every raw captured block (e.g. for clipping checks).
     """
     proc: EchoProcessor | None = None
@@ -121,6 +142,9 @@ def stream_frames(
     xruns = source.xruns
     n = 0
     fs = cfg.audio.sample_rate
+    ref_amps: list[float] = []  # direct-path level right after each lock
+    low = 0
+    lost = False
     for block in source.blocks():
         if on_block is not None:
             on_block(block)
@@ -129,6 +153,22 @@ def stream_frames(
             proc = EchoProcessor(cfg, t0=source.t0 + consumed / fs)
         consumed += len(block)
         for f in proc.push(block):
+            if lost:
+                lost = False
+                print("Chirp is back; re-locked.", file=sys.stderr)
+            if len(ref_amps) < LOST_FRAMES:
+                ref_amps.append(f.direct_amp)
+            elif f.direct_amp < LOST_FRACTION * float(np.median(ref_amps)):
+                low += 1
+                if low >= LOST_FRAMES:
+                    print("WARNING: the chirp has disappeared from the recording (speaker muted, "
+                          "volume turned down, or the device taken by another app). Waiting for it "
+                          "to come back...", file=sys.stderr)
+                    proc = EchoProcessor(cfg, t0=source.t0 + consumed / fs)
+                    ref_amps, low, lost = [], 0, True
+                    break
+            else:
+                low = 0
             yield f
             n += 1
             if max_frames is not None and n >= max_frames:

@@ -8,7 +8,10 @@ audio:
   input_device: "Microphone Array"   # NOT "Stereo Mix": that records the speaker digitally, no echoes
   output_device: null
   host_api: "Windows WASAPI"   # preferred host API; falls back to the default if missing
-  wasapi_exclusive: false      # exclusive mode bypasses some Windows effects but may be refused
+  # Exclusive mode bypasses the Windows mixer and its effects. On the Acer Aspire 14 AI,
+  # shared mode let noise suppression erase the chirp within ~3 s (73/200 chirps found);
+  # exclusive mode found 199/200. Falls back to shared mode if another app holds the device.
+  wasapi_exclusive: true
   output_channels: 2           # the mono chirp is copied to every output channel
   input_channels: 1
   input_channel: 0             # which captured channel to use (laptop mic arrays expose several)

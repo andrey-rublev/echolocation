@@ -7,6 +7,7 @@ import pytest
 
 from echo.config import Config, load_config
 from echo.profile import (
+    EchoFrame,
     EchoProcessor,
     EmaBackground,
     delay_to_meters,
@@ -119,3 +120,86 @@ def test_background_removes_static_and_keeps_motion() -> None:
     onset = np.argmax(times >= 2.0 + 0.1)
     assert np.abs(diff[before][5:, wall]).max() < 0.1 * P[before][:, wall].mean()
     assert diff[onset, person - 2 : person + 3].max() > 3 * np.abs(diff[before][5:, person]).max()
+
+
+def _drifting_recording(cfg: Config, periods: int, drift_per_period: float,
+                        wall_m: float = 1.5) -> np.ndarray:
+    """Chirp train whose arrival time slips steadily, like separate mic/speaker clocks."""
+    from echo.chirp import make_chirp
+    from echo.simulate import add_impulse
+
+    fs, P = cfg.audio.sample_rate, cfg.period_samples
+    chirp = make_chirp(cfg.chirp, fs)
+    wall = float(meters_to_delay(wall_m, fs))
+    h = np.zeros(periods * P + 2 * P)
+    for k in range(periods):
+        t = k * P + 1000 + k * drift_per_period
+        add_impulse(h, t, 1.0)
+        add_impulse(h, t + wall, 0.05)
+    x = np.convolve(h, chirp)[: len(h)]
+    return x + np.random.default_rng(0).normal(0, 1e-4, len(x))
+
+
+def test_processor_tracks_clock_drift() -> None:
+    # 0.5 samples/period = 208 ppm: ~150 samples over 300 periods, far beyond
+    # the +/-24 sample search window, so this fails without drift tracking.
+    cfg = load_config()  # calib offset 0: the synthetic direct path is at zero range
+    frames = EchoProcessor(cfg).push(_drifting_recording(cfg, 300, 0.5))
+    frames = [f for f in frames if f.index < 299]  # the tail holds no chirps
+    assert len(frames) > 250
+    lags = np.array([f.direct_lag for f in frames])
+    idx = np.array([f.index for f in frames], dtype=np.float64)
+    slope = np.polyfit(idx, lags, 1)[0]
+    assert abs(slope - 0.5) < 0.02
+    # The wall stays at the same range bin from start to end.
+    r = range_grid(cfg).axis_m()
+    far = r > 0.5
+
+    def wall(f: EchoFrame) -> float:
+        return float(r[far][np.argmax(f.profile[far])])
+
+    assert abs(wall(frames[5]) - 1.5) < 0.05
+    assert abs(wall(frames[-1]) - wall(frames[5])) < 0.03
+
+
+def test_fixed_alignment_does_not_track() -> None:
+    cfg = sim_cfg(align="fixed")
+    proc = EchoProcessor(cfg)
+    proc.push(_drifting_recording(cfg, 60, 0.3))
+    assert proc._shift == 0
+
+def test_lock_ignores_startup_junk() -> None:
+    # Real devices: the first periods after opening hold pops/clicks at random
+    # positions. The lock must wait for a run of agreeing peaks.
+    cfg = load_config()
+    P = cfg.period_samples
+    x = _drifting_recording(cfg, 80, 0.0)
+    x[: 6 * P] = 0.0
+    rng = np.random.default_rng(1)
+    for k in range(1, 6):
+        x[k * P + int(rng.integers(0, P - 50))] = 5.0  # one loud click per period
+    proc = EchoProcessor(cfg)
+    frames = proc.push(x)
+    assert proc.lock is not None and proc.lock.spread <= 1
+    assert abs(proc.lock.phase - 1000) <= 1
+    good = [f for f in frames if 10 <= f.index < 79]
+    assert np.all(np.abs([f.direct_lag for f in good]) < 1)
+
+def test_direct_path_prefers_first_arrival() -> None:
+    # A second arrival 9 samples after the direct path, sometimes stronger
+    # (as measured on the Acer laptop): alignment must not flip between them.
+    from echo.chirp import make_chirp
+    from echo.simulate import add_impulse
+
+    cfg = load_config()
+    P = cfg.period_samples
+    rng = np.random.default_rng(2)
+    h = np.zeros(120 * P)
+    for k in range(118):
+        add_impulse(h, k * P + 1000, 1.0)
+        add_impulse(h, k * P + 1009, float(rng.uniform(0.85, 1.08)))
+    x = np.convolve(h, make_chirp(cfg.chirp, cfg.audio.sample_rate))[: len(h)]
+    proc = EchoProcessor(cfg)
+    frames = [f for f in proc.push(x + rng.normal(0, 1e-4, len(x))) if f.index < 117]
+    assert proc.lock is not None and abs(proc.lock.phase - 1000) <= 1
+    assert np.ptp([f.direct_lag for f in frames]) < 1.0

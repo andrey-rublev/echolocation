@@ -107,7 +107,13 @@ fades it out. **Turn all of it off before recording anything:**
 5. **Realtek Audio Console / Intel Smart Sound** (if present): noise suppression, beamforming,
    echo cancellation → **Off**.
 6. Close Teams / Zoom / Discord (they switch on echo cancellation for the shared device).
-7. Still failing the linearity check? Set `audio.wasapi_exclusive: true` in `echo/config.yaml`.
+
+**WASAPI exclusive mode is on by default** (`audio.wasapi_exclusive: true`). It bypasses the
+Windows mixer and the effects above. On the Acer Aspire 14 AI with the settings untouched,
+shared mode let noise suppression erase the chirp within about 3 s (73 of 200 chirps found),
+while exclusive mode found 199 of 200 and passed linearity. Exclusive mode needs the speakers and
+mic to yourself: if another app is using them, the stream falls back to shared mode and prints a
+warning. `timing` shows which mode it got (`[exclusive]` / `[shared]`).
 
 `python -m echo.diagnostics linearity` tells you whether this worked (see below).
 
@@ -123,8 +129,17 @@ python -m echo.diagnostics linearity
 
 * Pick devices by name substring or id in `echo/config.yaml` (`audio.input_device`,
   `audio.output_device`); `null` uses the WASAPI defaults.
-* **timing** should report about 200 chirps in 10 s and a direct-path jitter of 0–1 samples
-  with 0 xruns. `--save-wav` writes `capture.wav` / `playback.wav` to `debug/<timestamp>/`.
+* **timing** should report about 200 chirps in 10 s, a direct-path jitter (99 % spread) of
+  2 samples or less, and 0 xruns. `--save-wav` writes `capture.wav` / `playback.wav` to
+  `debug/<timestamp>/`.
+* **Clock drift.** On laptops the microphone (here an Intel Smart Sound array) and the speaker
+  codec (Realtek) often run on separate crystals, so the direct path slides by a few ppm. That is
+  harmless but adds up to tens of samples over a few minutes. The processor follows it, and
+  `timing` reports it separately from jitter. Separately, the first ~1 s after the device opens
+  is excluded from the jitter figure while the converters settle.
+* **Double direct path.** The Acer shows a second arrival about 9 samples (0.2 ms) after the
+  direct path at ~95 % of its strength, probably through the chassis or off the surface below.
+  Alignment takes the *earliest* strong peak, so frames never flip between the two.
 * **linearity** alternates gain *g* and *g/2* within one stream. A linear recording chain
   gives an amplitude ratio of 2.00 and no drift. AGC pulls the ratio towards 1, and noise
   suppression shows up as drift. On failure it prints a loud warning plus the settings list above.
@@ -209,6 +224,22 @@ hysteresis (on above 0.6, off below 0.4) so the display does not flicker.
 
 ## Results
 
+### Hardware bring-up (Acer Aspire 14 AI, laptop on a nightstand)
+
+| Check | Gain 0.1 | Gain 0.3 |
+|---|---|---|
+| Chirps found in 10 s | 197 / 200 | 199 / 200 |
+| Direct-path jitter (std) | 0.24 samples | 0.10 samples |
+| Clock drift (mic vs speaker) | a few ppm, tracked | a few ppm, tracked |
+| Linearity (hi/lo ratio, expected 2.00) | 1.99 / 1.97 / 2.00, drift 1.1 % | – |
+| Frame-to-frame noise floor, 1–3 m | −46 dB re direct | **−55 dB** re direct |
+
+All numbers are with WASAPI exclusive mode and the Windows volume at 42 %. Higher gain lowers the
+noise floor by the full 9.5 dB, which matters: a person at 1–2 m echoes at roughly −40 to −50 dB.
+**Use `--gain 0.3` for collection and the live demo** if the chirp is tolerable in your room.
+
+![Real room, 30 s, nobody moving: background-subtracted waterfall at gain 0.3](docs/waterfall_real_room.png)
+
 ### Real recordings
 
 *Not recorded yet.* Collect sessions (see the checklist below), then run
@@ -248,7 +279,7 @@ not generalise across days in which furniture moved slightly. The CNN is
 translation-equivariant along range and compares against its own background channels.
 
 <p>
-  <img src="docs/live_infer_sim.png" alt="Live inference view: waterfall with predicted distance overlay and a PERSON 2.17 m readout" width="100%">
+  <img src="docs/live_infer_sim.png" alt="Live inference view: waterfall with the predicted distance in green and a PERSON 2.22 m readout; tracking gets noisier beyond 2 m" width="100%">
 </p>
 
 | | |
@@ -291,15 +322,16 @@ Expect real recordings to be noticeably worse: see Limitations.
 
 ## Physical steps checklist
 
-Everything above runs in the simulator. These steps need you and the hardware, in order:
+Steps marked ✅ were done on the Acer (see *Hardware bring-up* above). The rest need a person
+in front of the laptop:
 
-1. Turn off the Windows / Acer audio processing listed above.
-2. `python -m echo.audio_io list`. If the defaults are wrong, set the device names in `echo/config.yaml`.
-3. `python -m echo.diagnostics timing --seconds 10 --save-wav`. Expect about 200 chirps and jitter ≤ 1 sample.
-4. `python -m echo.diagnostics linearity`. Must PASS before collecting data.
+1. ✅ Devices: `python -m echo.audio_io list`. Input pinned to "Microphone Array" (not Stereo Mix).
+2. ✅ `python -m echo.diagnostics timing --seconds 10 --save-wav`: PASS in exclusive mode.
+3. ✅ `python -m echo.diagnostics linearity`: PASS. Re-run after driver or Windows updates.
+4. ✅ `python -m echo.camera download-model`; the webcam and pose model run at ~15 fps.
 5. `python -m echo.calibrate --distance 0.50` with a book.
-6. `python -m echo.live_waterfall`. Wave a hand at about 30 cm, press **s** for a screenshot.
-7. `python -m echo.camera download-model` and `python -m echo.camera calibrate --distance 1.5`.
+6. `python -m echo.live_waterfall --gain 0.3`. Wave a hand at about 30 cm, press **s** for a screenshot.
+7. `python -m echo.camera calibrate --distance 1.5`, standing square to the camera.
 8. Record a 1-minute `empty` session and a 1-minute `walking` session (or `auto --camera`),
    then `python -m echo.viz sessions ...` to compare them.
 9. Collect more data: several days, 2+ rooms, empty, still at known distances, walking. Then train and evaluate.

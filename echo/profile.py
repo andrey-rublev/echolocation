@@ -169,6 +169,21 @@ class EchoFrame:
     direct_amp: float  # envelope height at the direct-path peak
 
 
+def first_arrival(env: np.ndarray, j_max: int, lo: int, rel: float = 0.5) -> int:
+    """Earliest local maximum in ``env[lo:j_max+1]`` at least ``rel`` x ``env[j_max]``.
+
+    Laptops often show a second arrival a few samples after the direct path
+    (through the chassis, or off the surface the laptop stands on) at ~95% of
+    its strength; plain argmax then flips between the two from frame to frame.
+    The direct path is by definition the earliest strong arrival.
+    """
+    thr = rel * env[j_max]
+    for i in range(max(lo, 1), j_max):
+        if env[i] >= thr and env[i] >= env[i - 1] and env[i] >= env[i + 1]:
+            return i
+    return j_max
+
+
 @dataclass(frozen=True)
 class LockInfo:
     phase: int  # direct-path arrival phase within a period (samples)
@@ -184,9 +199,17 @@ class EchoProcessor:
     processor first locks onto that phase from ``warmup_periods`` periods, then
     cuts one lag window per period around it, so any system latency (even more
     than a period) is handled without knowing it in advance.
+
+    When the microphone and speaker run on separate hardware clocks (common on
+    laptops: e.g. an Intel SST mic array and a Realtek codec) the direct path
+    drifts by a few ppm, i.e. tens of samples over a few minutes. With
+    ``align: direct`` the cut window follows that drift slowly so the direct
+    path never leaves the search window; ``direct_lag`` is reported relative to
+    the original lock phase, so the drift is visible in diagnostics.
     """
 
     _MARGIN = 32  # extra lags on each side to keep Hilbert edge effects out
+    _TRACK_RATE = 0.05  # EMA rate of the drift tracker (per frame)
 
     def __init__(self, cfg: Config, t0: float = 0.0) -> None:
         p = cfg.profile
@@ -219,6 +242,8 @@ class EchoProcessor:
         self._obs: list[int] = []
         self._lock: LockInfo | None = None
         self._next_k = 0
+        self._track = 0.0  # smoothed drift of the direct path since lock (samples)
+        self._shift = 0  # integer part of _track applied to the cut window
 
     # -- public -------------------------------------------------------------
     @property
@@ -256,30 +281,41 @@ class EchoProcessor:
             if seg is None:
                 return
             env = np.abs(hilbert(fftconvolve(seg, self._rev, mode="valid")))
-            peak = int(np.argmax(env))
+            top = int(np.argmax(env))
+            peak = first_arrival(env, top, top - self._search)
             # Accept only frames with a clear peak (rules out silence / dropouts).
             if env[peak] > 8.0 * (np.median(env) + 1e-12):
                 self._obs.append(peak)
             self._warm_k += 1
-            if len(self._obs) >= need:
+            # Lock only on `need` consecutive clear peaks that agree. The first
+            # periods after a device opens often hold a pop or silence whose
+            # peaks land anywhere; one of those would bias the median lock.
+            self._obs = self._obs[-need:]
+            if len(self._obs) >= need and self._spread(self._obs) <= self._search:
                 self._lock = self._make_lock()
                 # First emitted frame: the earliest one still fully in the buffer.
                 first = self._buf_start + self._before - self._lock.phase
                 self._next_k = max(0, math.ceil(first / self.P))
 
+    def _unwrap(self, obs: list[int]) -> np.ndarray:
+        """Observations relative to the newest one, unwrapped around the period."""
+        o = np.asarray(obs)
+        return (o - o[-1] + self.P // 2) % self.P - self.P // 2
+
+    def _spread(self, obs: list[int]) -> float:
+        return float(np.ptp(self._unwrap(obs)))
+
     def _make_lock(self) -> LockInfo:
-        obs = np.asarray(self._obs)
-        ref = obs[0]
-        d = (obs - ref + self.P // 2) % self.P - self.P // 2  # circular unwrap
-        phase = int((ref + int(np.round(np.median(d)))) % self.P)
-        return LockInfo(phase=phase, spread=float(np.ptp(d)), n_obs=len(obs))
+        d = self._unwrap(self._obs)
+        phase = int((self._obs[-1] + int(np.round(np.median(d)))) % self.P)
+        return LockInfo(phase=phase, spread=float(np.ptp(d)), n_obs=len(self._obs))
 
     def _emit(self) -> list[EchoFrame]:
         assert self._lock is not None
         out: list[EchoFrame] = []
         while True:
             k = self._next_k
-            expected = k * self.P + self._lock.phase
+            expected = k * self.P + self._lock.phase + self._shift
             seg = self._segment(expected - self._before, self._seg_len)
             if seg is None:
                 break
@@ -287,11 +323,22 @@ class EchoProcessor:
             self._next_k += 1
         return out
 
+    def _update_track(self, residual: float, clear: bool) -> None:
+        # Only follow clear peaks well inside the search window; a lost or
+        # blocked direct path must not drag the window away.
+        if not (self._align_direct and clear and abs(residual) < self._search - 2):
+            return
+        self._track += self._TRACK_RATE * (self._shift + residual - self._track)
+        self._shift = int(round(self._track))
+
     def _frame(self, k: int, expected_abs: int, seg: np.ndarray) -> EchoFrame:
         env = np.abs(hilbert(fftconvolve(seg, self._rev, mode="valid")))
         lo, hi = self._before - self._search, self._before + self._search + 1
-        j = lo + int(np.argmax(env[lo:hi]))
+        j = first_arrival(env, lo + int(np.argmax(env[lo:hi])), lo)
         j_sub = parabolic_peak(env, j)
+        residual = j_sub - self._before
+        shift_used = self._shift
+        self._update_track(residual, clear=env[j] > 8.0 * (np.median(env) + 1e-12))
         anchor = j_sub if self._align_direct else float(self._before)
         zero = anchor + self._offset
         pos = zero + np.arange(self.grid.n_range_samples)
@@ -302,7 +349,7 @@ class EchoProcessor:
             index=k,
             time_s=self.t0 + expected_abs / self.fs,
             profile=prof.astype(np.float32),
-            direct_lag=j_sub - self._before,
+            direct_lag=shift_used + residual,
             direct_amp=float(env[j]),
         )
 
@@ -310,7 +357,9 @@ class EchoProcessor:
         if self._lock is None:
             keep_from = self._warm_k * self.P
         else:
-            keep_from = self._next_k * self.P + self._lock.phase - self._before
+            # Keep a little slack in case the drift tracker steps backwards.
+            keep_from = (self._next_k * self.P + self._lock.phase + self._shift
+                         - self._before - 2)
         # Never drop more than we hold: samples not yet received keep their index.
         drop = min(keep_from - self._buf_start, len(self._buf))
         if drop > 0:

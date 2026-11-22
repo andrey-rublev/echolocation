@@ -21,7 +21,7 @@ import numpy as np
 
 from echo.config import Config
 from echo.profile import EchoFrame, EmaBackground, range_grid
-from echo.sonar import Source, add_source_args, source_from_args, stream_frames
+from echo.sonar import Source, add_source_args, short_device_name, source_from_args, stream_frames
 from echo.viz import ACCENT, ACCENT2, CMAP, apply_style, to_db
 
 
@@ -107,15 +107,17 @@ class Waterfall:
         self.fig.colorbar(self.im, ax=self.ax_w, label="dB re direct path", pad=0.01)
         axis = self.grid.axis_m()
         (self.l_raw,) = self.ax_p.plot(np.full_like(axis, -120), axis, color=ACCENT, lw=1.2,
-                                       label="profile")
+                                       label="raw")
         (self.l_diff,) = self.ax_p.plot(np.full_like(axis, -120), axis, color=ACCENT2, lw=1.0,
-                                        label="minus background")
+                                        label="change")
         self.ax_p.set_xlim(-90, 0)
         self.ax_p.set_ylim(0, top)
         self.ax_p.set_xlabel("dB re direct path")
-        self.ax_p.set_title("current profile", loc="left")
+        self.ax_p.set_title("profile now", loc="left")
         self.ax_p.grid(True, alpha=0.4)
-        self.ax_p.legend(loc="upper right", frameon=False, fontsize=8)
+        # In the title row: inside the axes it would hide the 0-0.5 m region.
+        self.ax_p.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=2, fontsize=8,
+                         frameon=False, handlelength=1.2, columnspacing=0.8, borderaxespad=0.2)
         self.status = self.ax_w.text(0.01, 0.97, "", transform=self.ax_w.transAxes, va="top",
                                      fontsize=9, color="white",
                                      bbox={"facecolor": "black", "alpha": 0.5, "lw": 0})
@@ -175,7 +177,7 @@ def main(argv: list[str] | None = None) -> None:
     cfg, source = source_from_args(args, realtime=not args.headless)
     max_frames = None if args.seconds is None else int(round(args.seconds / cfg.chirp.period_s))
     wf = Waterfall(cfg, history_s=args.history,
-                   title=f"echo waterfall - {source.device_name}")
+                   title=f"echo waterfall - {short_device_name(source.device_name)}")
     feed = FrameFeed()
 
     if args.headless:

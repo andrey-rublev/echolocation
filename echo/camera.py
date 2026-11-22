@@ -162,11 +162,19 @@ class CameraLabeler:
             if not cap.isOpened():
                 raise RuntimeError(f"Could not open webcam {self.cfg.device}.")
             self._ready.set()
+            failures = 0
             while not self._stop.is_set():
                 ok, frame = cap.read()
                 t = time.monotonic()
                 if not ok:
+                    # Never spin: a camera that stopped delivering (privacy
+                    # shutter, unplugged, taken by another app) would pin a core.
+                    failures += 1
+                    if failures > 40:
+                        raise RuntimeError("The webcam stopped delivering frames.")
+                    time.sleep(0.05)
                     continue
+                failures = 0
                 sample, _ = est.detect(frame, t)
                 self.samples.append(sample)
         except BaseException as exc:

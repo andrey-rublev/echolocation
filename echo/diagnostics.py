@@ -40,7 +40,8 @@ Windows audio processing is probably altering the signal. Turn these off, then r
   5. Realtek Audio Console or Intel Smart Sound (if present): noise suppression,
      beam forming, echo cancellation -> Off.
   6. Close Teams/Zoom/Discord (they enable echo cancellation on the shared device).
-  7. Still failing? Set audio.wasapi_exclusive: true in echo/config.yaml (bypasses the shared mixer).
+  7. Check the device line says [exclusive]. If it says [shared], close every other app using
+     the speakers or mic (browser tabs, Teams, Discord) so WASAPI exclusive mode can open.
 """
 
 
@@ -62,6 +63,8 @@ class TimingResult:
     lock_spread: float
     jitter_std: float
     jitter_p2p: float
+    jitter_p99: float  # 2 x 99th percentile of |residual|: robust to a single clock slip
+    drift_ppm: float  # steady mic/speaker clock mismatch (tracked by the processor)
     direct_amp_median: float
     direct_to_floor_db: float
     xruns: int
@@ -77,7 +80,9 @@ class TimingResult:
             f"Run length        : {self.seconds:.1f} s ({self.periods_expected} chirp periods)",
             f"Chirps detected   : {self.chirps_detected}  (profiles after lock: {self.profiles})",
             f"Direct-path phase : {self.lock_phase} samples (warm-up spread {self.lock_spread:.0f})",
-            f"Direct-path jitter: std {self.jitter_std:.2f}, peak-to-peak {self.jitter_p2p:.2f} samples",
+            f"Direct-path jitter: std {self.jitter_std:.2f}, 99% spread {self.jitter_p99:.2f}, "
+            f"peak-to-peak {self.jitter_p2p:.2f} samples (after removing drift)",
+            f"Clock drift       : {self.drift_ppm:+.1f} ppm (mic vs speaker clock; tracked automatically)",
             f"Direct amplitude  : {self.direct_amp_median:.3f} (direct/floor {self.direct_to_floor_db:.1f} dB)",
             f"Input peak        : {self.peak_abs:.3f} of full scale",
             f"Xruns             : {self.xruns}",
@@ -118,19 +123,41 @@ def run_timing(cfg: Config, source: Source, seconds: float = 10.0) -> TimingResu
     lock = proc.lock if proc is not None else None
     if not frames or lock is None:
         return TimingResult(seconds, periods, 0, 0, None, float("nan"), float("nan"), float("nan"),
-                            0.0, float("-inf"), source.xruns, peak[0],
+                            float("nan"), float("nan"), 0.0, float("-inf"), source.xruns, peak[0],
                             ["no chirps detected: check volume, mute switches and device ids"])
     lags = np.array([f.direct_lag for f in frames])
     amps = np.array([f.direct_amp for f in frames])
     floor = _floor(frames, cfg)
     med = float(np.median(amps))
     # Warm-up periods are chirps too; they were used for locking, not profiled.
-    detected = int(np.sum(amps > 0.25 * med)) + lock.n_obs
-    p2p = float(np.ptp(lags))
+    clear = amps > 0.25 * med
+    detected = int(np.sum(clear)) + lock.n_obs
+    # Real devices settle for ~1 s after opening (sub-sample steps while their
+    # rate converters lock); keep that out of the steady-state jitter numbers.
+    settle = int(round(1.0 / cfg.chirp.period_s))
+    steady = clear & (np.array([f.index for f in frames]) >= settle)
+    if steady.sum() >= 3:
+        clear = steady
+    # Separate a steady clock drift (harmless: the processor tracks it) from
+    # frame-to-frame jitter (harmful: it smears the range profile).
+    idx = np.array([f.index for f in frames], dtype=np.float64)
+    if clear.sum() >= 3:
+        slope, icpt = np.polyfit(idx[clear], lags[clear], 1)
+        resid = lags[clear] - (slope * idx[clear] + icpt)
+    else:
+        slope, resid = 0.0, lags
+    drift_ppm = float(slope / P * 1e6)
+    p2p = float(np.ptp(resid))
+    # Separate devices occasionally slip by a sample to re-sync their clocks;
+    # that one frame is harmless with per-frame alignment, so judge the 99%.
+    p99 = float(2 * np.percentile(np.abs(resid), 99))
     if detected < 0.9 * periods:
         problems.append(f"only {detected}/{periods} chirps detected")
-    if p2p > 2.0:
-        problems.append(f"direct-path jitter {p2p:.1f} samples > 2")
+    if p99 > 2.0:
+        problems.append(f"direct-path jitter {p99:.1f} samples > 2")
+    if abs(drift_ppm) > 200:
+        problems.append(f"clock drift {drift_ppm:+.0f} ppm is implausibly large: mic and speaker "
+                        "may be running at different sample rates")
     if source.xruns:
         problems.append(f"{source.xruns} xruns (buffer over/underflow); try audio.latency: high")
     if 20 * np.log10(med / floor) < 20:
@@ -144,8 +171,10 @@ def run_timing(cfg: Config, source: Source, seconds: float = 10.0) -> TimingResu
         profiles=len(frames),
         lock_phase=lock.phase,
         lock_spread=lock.spread,
-        jitter_std=float(np.std(lags)),
+        jitter_std=float(np.std(resid)),
         jitter_p2p=p2p,
+        jitter_p99=p99,
+        drift_ppm=drift_ppm,
         direct_amp_median=med,
         direct_to_floor_db=float(20 * np.log10(med / floor)),
         xruns=source.xruns,
@@ -241,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Source: {source.device_name}, gain {source.gain:.3f}")
     if args.cmd == "timing":
         res = run_timing(cfg, source, args.seconds)
+        print(f"Stream            : {source.device_name}")  # now includes [exclusive]/[shared]
         print(res.report())
         if args.save_wav and not args.sim:
             from echo.audio_io import debug_dir, save_wavs
@@ -254,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(WINDOWS_AUDIO_HELP)
         return 0 if res.passed else 1
     res_l = run_linearity(cfg, source, step_seconds=args.step_seconds)
+    print(f"Stream: {source.device_name}")
     print(res_l.report())
     if not res_l.passed:
         print(_banner("LINEARITY CHECK FAILED: Windows audio enhancements / AGC / noise "
