@@ -1,4 +1,4 @@
-﻿# echolocation configuration. Every module reads its parameters from here.
+# echolocation configuration. Every module reads its parameters from here.
 # Paths are relative to the repository root.
 
 audio:

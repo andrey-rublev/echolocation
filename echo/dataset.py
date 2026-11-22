@@ -219,7 +219,29 @@ def split_sessions(
     def ids(gs: list[str]) -> tuple[str, ...]:
         return tuple(sorted(s.id for g in gs for s in groups[g]))
 
-    return Split(ids(train), ids(val), ids(test), group_by)
+    tr, va, te = ids(train), ids(val), ids(test)
+    if not va and val_fraction > 0 and len(tr) >= 4:
+        # Too few days for a validation day: hold out whole training *sessions*
+        # instead (stratified). Validation only drives early stopping; the test
+        # days stay untouched.
+        by_id = {s.id: s for s in sessions}
+        by_stratum: dict[str, list[str]] = {}
+        for i in tr:
+            by_stratum.setdefault(_strata(by_id[i]), []).append(i)
+        pools = [sorted(m) for _, m in sorted(by_stratum.items()) if len(m) >= 2]
+        for m in pools:
+            rng.shuffle(m)
+        rng.shuffle(pools)
+        target = max(1, int(round(len(tr) * val_fraction)))
+        picked: list[str] = []
+        # Round-robin over strata, never emptying one, until the target size.
+        while len(picked) < target and any(len(m) > 1 for m in pools):
+            for m in pools:
+                if len(picked) < target and len(m) > 1:
+                    picked.append(m.pop())
+        va = tuple(sorted(picked))
+        tr = tuple(i for i in tr if i not in set(va))
+    return Split(tr, va, te, group_by)
 
 
 # --------------------------------------------------------------------------- #

@@ -192,7 +192,7 @@ def run_linearity(
     tolerance: float = 0.15,
 ) -> LinearityResult:
     """Alternate between ``high_gain`` and half of it within one stream."""
-    hi = cfg.chirp.gain if high_gain is None else high_gain
+    hi = source.gain if high_gain is None else high_gain
     lo = hi / 2
     gains = [hi if i % 2 == 0 else lo for i in range(steps)]
     per_step = int(round(step_seconds / cfg.chirp.period_s))

@@ -112,6 +112,9 @@ def collect_session(
             pres, dist = sim_camera_labels(times, source.truth_at_capture, rng)
         else:
             assert labeler is not None
+            if labeler.error is not None or not labeler.samples:
+                print(f"WARNING: the camera produced no usable frames ({labeler.error}); "
+                      "this session has no labels.")
             pres, dist = align_labels(times, labeler.samples, cfg.camera.max_label_age_s)
         label_source = "camera"
     else:

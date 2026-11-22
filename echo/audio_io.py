@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import queue
-import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -155,7 +154,6 @@ class DuplexSonar:
         self._raw_out: list[np.ndarray] = []
         self._mono = np.zeros(0, dtype=np.float32)
         self._stream: Any = None
-        self._lock = threading.Lock()
         self.t0: float = 0.0  # time.monotonic() of the first captured sample
         self.xruns = 0
         self.dropped_blocks = 0

@@ -102,21 +102,27 @@ def evaluate_run(run_dir: Path, data_dir: Path | None = None, make_plots: bool =
 
 def verdict(r: Results) -> list[str]:
     """Does the CNN beat the baselines? One line per task, with the reason."""
+    def judge(cnn: float, base: float, higher_better: bool, tie: float) -> str:
+        if not np.isfinite(base):
+            return "no baseline"
+        if abs(cnn - base) <= tie:
+            return "tie (within noise)"
+        better = cnn > base if higher_better else cnn < base
+        return "CNN better" if better else "CNN NOT better"
+
     out = []
     if r.presence:
         base = max((v["balanced_accuracy"], k) for k, v in r.presence.items() if k != "cnn")
         c = r.presence["cnn"]["balanced_accuracy"]
-        out.append(f"presence: CNN balanced accuracy {c:.3f} vs best baseline ({base[1]}) {base[0]:.3f} -> "
-                   + ("CNN better" if c > base[0] else "CNN NOT better"))
+        out.append(f"presence: CNN balanced accuracy {c:.3f} vs best baseline ({base[1]}) "
+                   f"{base[0]:.3f} -> {judge(c, base[0], True, 0.005)}")
     if r.distance:
         c = r.distance["cnn"]["mae"]
         b = r.distance.get("ridge", {}).get("mae", float("nan"))
-        out.append(f"distance: CNN MAE {c:.3f} m vs ridge {b:.3f} m -> "
-                   + ("CNN better" if not c >= b else "CNN NOT better"))
+        out.append(f"distance: CNN MAE {c:.3f} m vs ridge {b:.3f} m -> {judge(c, b, False, 0.005)}")
     if r.room:
         c, b = r.room["cnn"]["accuracy"], r.room["logreg"]["accuracy"]
-        out.append(f"room: CNN frame accuracy {c:.3f} vs logreg {b:.3f} -> "
-                   + ("CNN better" if c > b else ("tie" if c == b else "CNN NOT better")))
+        out.append(f"room: CNN frame accuracy {c:.3f} vs logreg {b:.3f} -> {judge(c, b, True, 0.005)}")
     return out
 
 
@@ -159,7 +165,8 @@ def _confusion(ax: Any, cm: list[list[int]], labels: list[str], title: str) -> N
     for i in range(len(labels)):
         for j in range(len(labels)):
             ax.text(j, i, f"{int(m[i, j])}\n{100 * norm[i, j]:.0f}%", ha="center", va="center",
-                    color="black" if norm[i, j] > 0.5 else FG, fontsize=9)
+                    color="white" if norm[i, j] > 0.5 else "#111827", fontsize=10,
+                    fontweight="bold")
     ax.set_xticks(range(len(labels)), labels, rotation=20)
     ax.set_yticks(range(len(labels)), labels)
     ax.set_xlabel("predicted")
@@ -230,14 +237,14 @@ def _plots(run_dir: Path, bin_m: float, test: FrameSet, cnn: dict[str, np.ndarra
         a1.plot(tt, cnn["presence"][m], color=ACCENT, lw=1.1, label="CNN")
         a1.set_ylabel("P(person)")
         a1.set_ylim(-0.05, 1.05)
-        a1.legend(frameon=False, ncol=3, loc="upper right", fontsize=8)
-        a1.set_title(f"test session: {test.session_ids[best_s]}", loc="left")
+        a1.legend(ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=8, frameon=False)
+        a1.set_title(f"test session: {test.session_ids[best_s]}", loc="left", pad=22)
         a2.plot(tt, test.distance[m], color=GREEN, lw=1.5, label="label")
         shown = np.where(cnn["presence"][m] >= 0.5, cnn["distance"][m], np.nan)
         a2.plot(tt, shown, color=ACCENT, lw=1.0, label="CNN (when present)")
         a2.set_ylabel("distance (m)")
         a2.set_xlabel("time (s)")
-        a2.legend(frameon=False, ncol=2, loc="upper right", fontsize=8)
+        a2.legend(ncol=2, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=8, frameon=False)
         a2.grid(True, alpha=0.4)
         fig.savefig(run_dir / "timeline.png", dpi=130)
         plt.close(fig)
