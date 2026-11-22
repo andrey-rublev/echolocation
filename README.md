@@ -11,11 +11,11 @@ against the background. A person walking 0.6 m → 3 m → 0.6 m draws a triangl
 
 > [!WARNING]
 > **Do not run this loud, and never with your ear near the speaker.** Chirps are
-> 2–18 kHz sweeps at 20 per second. Gain starts at **0.1 of full scale**, and
-> `safety.max_gain` (0.3) cannot be exceeded without the explicit `--allow-loud`
-> flag. Small laptop speakers can be damaged by sustained loud high-frequency
-> content, so set the Windows volume to a moderate level and raise `--gain` only
-> if echoes are too weak.
+> 2–18 kHz sweeps at 20 per second. The default gain is **0.3 of full scale**, which is
+> also `safety.max_gain`. Anything louder needs the explicit `--allow-loud` flag.
+> Small laptop speakers can be damaged by sustained loud high-frequency content, so
+> set the Windows volume to a moderate level. Use `--gain 0.1` if the chirp is
+> unpleasant in your room.
 
 ---
 
@@ -236,7 +236,7 @@ hysteresis (on above 0.6, off below 0.4) so the display does not flicker.
 
 All numbers are with WASAPI exclusive mode and the Windows volume at 42 %. Higher gain lowers the
 noise floor by the full 9.5 dB, which matters: a person at 1–2 m echoes at roughly −40 to −50 dB.
-**Use `--gain 0.3` for collection and the live demo** if the chirp is tolerable in your room.
+That is why **0.3 is the default**. Pass `--gain 0.1` if the chirp is too much for your room.
 
 ![Real room, 30 s, nobody moving: background-subtracted waterfall at gain 0.3](docs/waterfall_real_room.png)
 
@@ -330,7 +330,7 @@ in front of the laptop:
 3. ✅ `python -m echo.diagnostics linearity`: PASS. Re-run after driver or Windows updates.
 4. ✅ `python -m echo.camera download-model`; the webcam and pose model run at ~15 fps.
 5. `python -m echo.calibrate --distance 0.50` with a book.
-6. `python -m echo.live_waterfall --gain 0.3`. Wave a hand at about 30 cm, press **s** for a screenshot.
+6. `python -m echo.live_waterfall`. Wave a hand at about 30 cm, press **s** for a screenshot.
 7. `python -m echo.camera calibrate --distance 1.5`, standing square to the camera.
 8. Record a 1-minute `empty` session and a 1-minute `walking` session (or `auto --camera`),
    then `python -m echo.viz sessions ...` to compare them.

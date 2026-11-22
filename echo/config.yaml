@@ -24,7 +24,9 @@ chirp:
   period_s: 0.050              # chirp + silence; 0.05 s = 20 chirps/sec
   method: "linear"             # "linear" or "logarithmic"
   taper: 0.25                  # Tukey window alpha (0 = rectangular, 1 = Hann)
-  gain: 0.1                    # fraction of full scale. Start low.
+  # Fraction of full scale. 0.3 (= safety.max_gain) gave a 9.5 dB lower noise floor than 0.1
+  # on the Acer, enough to see a person at 1-2 m. Use --gain 0.1 if it is too loud.
+  gain: 0.3
 
 safety:
   # Hard ceiling on chirp gain. Anything above this is refused unless you pass
